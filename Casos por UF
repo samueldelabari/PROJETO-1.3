@@ -1,0 +1,16 @@
+set terminal pngcairo size 1200,650 enhanced font "Arial,9"
+set output "graficos/casos_por_uf.png"
+
+set datafile separator ";"
+set title "Casos de SRAG por UF de notificacao"
+set xlabel "UF"
+set ylabel "Casos"
+set grid ytics
+set key off
+set style fill solid 0.75 border -1
+set boxwidth 0.7
+set yrange [0:*]
+set xtics rotate by -45
+set bmargin 7
+
+plot "dados/tratados/casos_por_uf.csv" every ::1 using 2:xtic(1) with boxes lc rgb "#3f7f3f"
