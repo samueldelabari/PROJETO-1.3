@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+# Sprint 01 - Integracao dos dados de SRAG
+# Projeto 3 - Projetos I
+# Este script valida os CSVs oficiais, consolida os anos de 2021 a 2026
+# e registra o processo em logs/sprint01_integracao.log.
+
+set -euo pipefail
+
+ANOS=(2021 2022 2023 2024 2025 2026)
+
+DIR_BRUTOS="dados/brutos"
+DIR_CONSOLIDADO="dados/consolidado"
+DIR_LOGS="logs"
+
+ARQUIVO_CONSOLIDADO="$DIR_CONSOLIDADO/srag_2021_2026.csv"
+ARQUIVO_LOG="$DIR_LOGS/sprint01_integracao.log"
+
+FONTE_DADOS="Portal de Dados Abertos do SUS - Banco de dados da Sindrome Respiratoria Aguda Grave (SRAG) - 2019 a 2026"
+URL_DADOS="https://dadosabertos.saude.gov.br/dataset/srag-2019-a-2026"
+
+registrar() {
+    echo "$1" >> "$ARQUIVO_LOG"
+}
+
+# Cria as pastas necessarias usando caminhos relativos ao projeto.
+mkdir -p "$DIR_BRUTOS" "$DIR_CONSOLIDADO" "$DIR_LOGS"
+
+# Reinicia o log a cada execucao.
+: > "$ARQUIVO_LOG"
+
+registrar "Sprint 01 - Integracao dos dados de SRAG"
+registrar "Data de execucao: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+registrar "Fonte dos dados: $FONTE_DADOS"
+registrar "URL da fonte: $URL_DADOS"
+registrar "Anos utilizados: ${ANOS[*]}"
+registrar ""
+
+ENCONTRADOS=()
+FALTANTES=()
+
+# Verifica se os arquivos esperados existem em dados/brutos.
+for ANO in "${ANOS[@]}"; do
+    ARQUIVO="$DIR_BRUTOS/srag_${ANO}.csv"
+
+    if [[ -f "$ARQUIVO" ]]; then
+        ENCONTRADOS+=("$ARQUIVO")
+    else
+        FALTANTES+=("$ARQUIVO")
+    fi
+done
+
+registrar "Arquivos encontrados:"
+if [[ "${#ENCONTRADOS[@]}" -eq 0 ]]; then
+    registrar "- nenhum"
+else
+    for ARQUIVO in "${ENCONTRADOS[@]}"; do
+        registrar "- $ARQUIVO"
+    done
+fi
+
+registrar ""
+registrar "Arquivos faltantes:"
+if [[ "${#FALTANTES[@]}" -eq 0 ]]; then
+    registrar "- nenhum"
+else
+    for ARQUIVO in "${FALTANTES[@]}"; do
+        registrar "- $ARQUIVO"
+    done
+fi
+
+registrar ""
+
+# A consolidacao so e feita quando todos os anos obrigatorios estao presentes.
+if [[ "${#FALTANTES[@]}" -gt 0 ]]; then
+    rm -f "$ARQUIVO_CONSOLIDADO"
+    registrar "Arquivo consolidado gerado: nao gerado"
+    registrar "Quantidade final de linhas: 0"
+    registrar "Mensagem final da Sprint 01: existem arquivos faltantes. Baixe os CSVs oficiais, renomeie-os conforme o padrao solicitado e execute o script novamente."
+    echo "Ha arquivos faltantes. Consulte $ARQUIVO_LOG."
+    exit 1
+fi
+
+# Mantem apenas o primeiro cabecalho:
+# FNR == 1 identifica a primeira linha de cada CSV.
+# NR != 1 garante que o cabecalho do primeiro CSV seja mantido.
+awk 'FNR == 1 && NR != 1 { next } { print }' "${ENCONTRADOS[@]}" > "$ARQUIVO_CONSOLIDADO"
+
+QUANTIDADE_LINHAS="$(wc -l < "$ARQUIVO_CONSOLIDADO" | tr -d ' ')"
+
+registrar "Arquivo consolidado gerado: $ARQUIVO_CONSOLIDADO"
+registrar "Quantidade final de linhas: $QUANTIDADE_LINHAS"
+registrar "Mensagem final da Sprint 01: integracao concluida com sucesso. O dataset consolidado e o log foram gerados."
+
+echo "Integracao concluida. Consulte $ARQUIVO_LOG."
