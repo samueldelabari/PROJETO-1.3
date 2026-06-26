@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+
+"""
+Sprint 02 - Tratamento dos dados de SRAG.
+
+O script le o CSV consolidado da Sprint 01 em partes pequenas,
+gera tabelas resumidas e registra o processo em log.
+"""
+
+from collections import Counter
+import csv
+from datetime import datetime
+from itertools import islice
+from pathlib import Path
+import re
+import sys
+
+
+ANOS_ESPERADOS = {"2021", "2022", "2023", "2024", "2025", "2026"}
+TAMANHO_CHUNK = 10000
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+ARQUIVO_ENTRADA = BASE_DIR / "dados" / "consolidado" / "srag_2021_2026.csv"
+DIR_TRATADOS = BASE_DIR / "dados" / "tratados"
+DIR_LOGS = BASE_DIR / "logs"
+ARQUIVO_LOG = DIR_LOGS / "sprint02_tratamento.log"
+
+ARQUIVOS_SAIDA = {
+    "casos_por_ano": DIR_TRATADOS / "casos_por_ano.csv",
+    "obitos_por_ano": DIR_TRATADOS / "obitos_por_ano.csv",
+    "casos_por_uf": DIR_TRATADOS / "casos_por_uf.csv",
+    "casos_por_sexo": DIR_TRATADOS / "casos_por_sexo.csv",
+    "classificacao_final": DIR_TRATADOS / "classificacao_final.csv",
+}
+
+MAPA_SEXO = {
+    "M": "Masculino",
+    "F": "Feminino",
+    "I": "Ignorado",
+    "9": "Ignorado",
+    "": "Nao informado",
+}
+
+MAPA_CLASSIFICACAO = {
+    "1": "SRAG por influenza",
+    "2": "SRAG por outro virus respiratorio",
+    "3": "SRAG por outro agente etiologico",
+    "4": "SRAG nao especificado",
+    "5": "SRAG por COVID-19",
+}
+
+# Na base SRAG, os codigos 2 e 3 da coluna EVOLUCAO indicam obito.
+CODIGOS_OBITO = {"2", "3"}
+
+
+def configurar_csv():
+    """Ajusta o limite de tamanho de campos do leitor CSV."""
+    limite = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limite)
+            return
+        except OverflowError:
+            limite = int(limite / 10)
+
+
+def registrar(mensagem):
+    with ARQUIVO_LOG.open("a", encoding="utf-8", newline="\n") as log:
+        log.write(f"{mensagem}\n")
+
+
+def caminho_relativo(caminho):
+    return caminho.relative_to(BASE_DIR).as_posix()
+
+
+def reiniciar_log():
+    DIR_LOGS.mkdir(parents=True, exist_ok=True)
+    ARQUIVO_LOG.write_text("", encoding="utf-8")
+
+
+def detectar_codificacao(caminho):
+    amostra = caminho.read_bytes()[:65536]
+    for codificacao in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
+        try:
+            amostra.decode(codificacao)
+            return codificacao
+        except UnicodeDecodeError:
+            continue
+    return "latin1"
+
+
+def detectar_separador(caminho, codificacao):
+    with caminho.open("r", encoding=codificacao, errors="replace", newline="") as arquivo:
+        amostra = arquivo.read(65536)
+
+    try:
+        dialecto = csv.Sniffer().sniff(amostra, delimiters=";,\t|")
+        return dialecto.delimiter
+    except csv.Error:
+        return ";"
+
+
+def limpar_coluna(nome):
+    return nome.strip().strip('"').lstrip("\ufeff")
+
+
+def normalizar_codigo(valor):
+    valor = (valor or "").strip()
+    if valor.endswith(".0") and valor[:-2].isdigit():
+        valor = valor[:-2]
+    return valor
+
+
+def extrair_ano(valor):
+    valor = (valor or "").strip()
+    if not valor:
+        return None
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", valor):
+        ano = valor[:4]
+    elif re.match(r"^\d{2}/\d{2}/\d{4}$", valor):
+        ano = valor[-4:]
+    else:
+        encontrado = re.search(r"(20\d{2})", valor)
+        ano = encontrado.group(1) if encontrado else None
+
+    if ano in ANOS_ESPERADOS:
+        return ano
+    return None
+
+
+def valor_da_linha(linha, indices, coluna):
+    indice = indices.get(coluna)
+    if indice is None or indice >= len(linha):
+        return ""
+    return linha[indice].strip()
+
+
+def rotulo_sexo(valor):
+    codigo = normalizar_codigo(valor).upper()
+    return MAPA_SEXO.get(codigo, f"Outro ({codigo})" if codigo else "Nao informado")
+
+
+def rotulo_classificacao(valor):
+    codigo = normalizar_codigo(valor)
+    if not codigo:
+        return "Nao informado"
+    descricao = MAPA_CLASSIFICACAO.get(codigo, "Outro ou ignorado")
+    return f"{codigo} - {descricao}"
+
+
+def chunks(iterador, tamanho):
+    while True:
+        parte = list(islice(iterador, tamanho))
+        if not parte:
+            break
+        yield parte
+
+
+def escrever_csv(caminho, cabecalho, linhas):
+    with caminho.open("w", encoding="utf-8", newline="") as arquivo:
+        escritor = csv.writer(arquivo, delimiter=";", lineterminator="\n")
+        escritor.writerow(cabecalho)
+        escritor.writerows(linhas)
+
+
+def linhas_contador(contador, ordenar_por_total=False):
+    if ordenar_por_total:
+        return sorted(contador.items(), key=lambda item: (-item[1], item[0]))
+    return sorted(contador.items(), key=lambda item: item[0])
+
+
+def main():
+    configurar_csv()
+    DIR_TRATADOS.mkdir(parents=True, exist_ok=True)
+    reiniciar_log()
+
+    registrar("Sprint 02 - Tratamento dos dados de SRAG")
+    registrar(f"Data de execucao: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    registrar(f"Arquivo de entrada usado: {caminho_relativo(ARQUIVO_ENTRADA)}")
+
+    if not ARQUIVO_ENTRADA.exists():
+        registrar("Mensagem final da Sprint 02: arquivo consolidado nao encontrado.")
+        print("Arquivo consolidado nao encontrado. Consulte o log da Sprint 02.")
+        return 1
+
+    tamanho_gib = ARQUIVO_ENTRADA.stat().st_size / (1024 ** 3)
+    codificacao = detectar_codificacao(ARQUIVO_ENTRADA)
+    separador = detectar_separador(ARQUIVO_ENTRADA, codificacao)
+
+    registrar(f"Tamanho aproximado do arquivo de entrada: {tamanho_gib:.2f} GiB")
+    registrar(f"Codificacao utilizada: {codificacao}")
+    registrar(f"Separador detectado: {repr(separador)}")
+    registrar("Indicadores escolhidos:")
+    registrar("- Casos por ano")
+    registrar("- Obitos por ano")
+    registrar("- Casos por UF")
+    registrar("- Casos por sexo")
+    registrar("- Classificacao final")
+    registrar("Regra para obitos: EVOLUCAO com codigo 2 ou 3")
+
+    casos_por_ano = Counter()
+    obitos_por_ano = Counter()
+    casos_por_uf = Counter()
+    casos_por_sexo = Counter()
+    classificacao_final = Counter()
+
+    with ARQUIVO_ENTRADA.open("r", encoding=codificacao, errors="replace", newline="") as arquivo:
+        leitor = csv.reader(arquivo, delimiter=separador)
+        cabecalho = [limpar_coluna(coluna) for coluna in next(leitor)]
+        indices = {coluna: indice for indice, coluna in enumerate(cabecalho)}
+
+        colunas_necessarias = ["DT_NOTIFIC", "DT_SIN_PRI", "SG_UF_NOT", "CS_SEXO", "CLASSI_FIN", "EVOLUCAO"]
+        colunas_encontradas = [coluna for coluna in colunas_necessarias if coluna in indices]
+        colunas_ausentes = [coluna for coluna in colunas_necessarias if coluna not in indices]
+
+        coluna_ano = "DT_NOTIFIC" if "DT_NOTIFIC" in indices else "DT_SIN_PRI" if "DT_SIN_PRI" in indices else None
+
+        registrar("")
+        registrar("Colunas encontradas:")
+        for coluna in colunas_encontradas:
+            registrar(f"- {coluna}")
+
+        registrar("Colunas ausentes:")
+        if colunas_ausentes:
+            for coluna in colunas_ausentes:
+                registrar(f"- {coluna}")
+        else:
+            registrar("- nenhuma")
+
+        registrar(f"Coluna usada para ano: {coluna_ano if coluna_ano else 'nenhuma'}")
+        registrar("")
+
+        linhas_processadas = 0
+        for parte in chunks(leitor, TAMANHO_CHUNK):
+            for linha in parte:
+                linhas_processadas += 1
+
+                ano = extrair_ano(valor_da_linha(linha, indices, coluna_ano)) if coluna_ano else None
+                if ano:
+                    casos_por_ano[ano] += 1
+
+                    evolucao = normalizar_codigo(valor_da_linha(linha, indices, "EVOLUCAO"))
+                    if evolucao in CODIGOS_OBITO:
+                        obitos_por_ano[ano] += 1
+
+                if "SG_UF_NOT" in indices:
+                    uf = valor_da_linha(linha, indices, "SG_UF_NOT").upper() or "Nao informado"
+                    casos_por_uf[uf] += 1
+
+                if "CS_SEXO" in indices:
+                    sexo = rotulo_sexo(valor_da_linha(linha, indices, "CS_SEXO"))
+                    casos_por_sexo[sexo] += 1
+
+                if "CLASSI_FIN" in indices:
+                    classificacao = rotulo_classificacao(valor_da_linha(linha, indices, "CLASSI_FIN"))
+                    classificacao_final[classificacao] += 1
+
+            if linhas_processadas % 500000 < TAMANHO_CHUNK:
+                print(f"Linhas processadas: {linhas_processadas}")
+
+    arquivos_gerados = []
+
+    if coluna_ano:
+        escrever_csv(ARQUIVOS_SAIDA["casos_por_ano"], ["ano", "casos"], linhas_contador(casos_por_ano))
+        escrever_csv(ARQUIVOS_SAIDA["obitos_por_ano"], ["ano", "obitos"], linhas_contador(obitos_por_ano))
+        arquivos_gerados.extend([ARQUIVOS_SAIDA["casos_por_ano"], ARQUIVOS_SAIDA["obitos_por_ano"]])
+
+    if "SG_UF_NOT" in indices:
+        escrever_csv(ARQUIVOS_SAIDA["casos_por_uf"], ["uf", "casos"], linhas_contador(casos_por_uf, ordenar_por_total=True))
+        arquivos_gerados.append(ARQUIVOS_SAIDA["casos_por_uf"])
+
+    if "CS_SEXO" in indices:
+        escrever_csv(ARQUIVOS_SAIDA["casos_por_sexo"], ["sexo", "casos"], linhas_contador(casos_por_sexo, ordenar_por_total=True))
+        arquivos_gerados.append(ARQUIVOS_SAIDA["casos_por_sexo"])
+
+    if "CLASSI_FIN" in indices:
+        escrever_csv(ARQUIVOS_SAIDA["classificacao_final"], ["classificacao", "casos"], linhas_contador(classificacao_final))
+        arquivos_gerados.append(ARQUIVOS_SAIDA["classificacao_final"])
+
+    registrar(f"Linhas de dados processadas: {linhas_processadas}")
+    registrar("Arquivos tratados gerados:")
+    if arquivos_gerados:
+        for caminho in arquivos_gerados:
+            registrar(f"- {caminho_relativo(caminho)}")
+    else:
+        registrar("- nenhum")
+
+    registrar("Mensagem final da Sprint 02: tratamento concluido com sucesso. Os arquivos resumidos foram gerados para uso no GNUplot.")
+    print("Tratamento concluido. Consulte logs/sprint02_tratamento.log.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
