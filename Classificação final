@@ -1,0 +1,16 @@
+set terminal pngcairo size 1200,650 enhanced font "Arial,9"
+set output "graficos/classificacao_final.png"
+
+set datafile separator ";"
+set title "Classificacao final dos casos de SRAG"
+set xlabel "Classificacao final"
+set ylabel "Casos"
+set grid ytics
+set key off
+set style fill solid 0.75 border -1
+set boxwidth 0.7
+set yrange [0:*]
+set xtics rotate by -30
+set bmargin 9
+
+plot "dados/tratados/classificacao_final.csv" every ::1 using 2:xtic(1) with boxes lc rgb "#b07f2f"
