@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+
+# Sprint 02 - Geracao dos graficos com GNUplot
+# Este script executa todos os arquivos .plt da pasta scripts/gnuplot.
+
+set -euo pipefail
+
+# Garante que a execucao aconteca a partir da raiz do projeto.
+cd "$(dirname "$0")/.."
+
+mkdir -p graficos
+mkdir -p logs
+
+ARQUIVO_LOG="logs/sprint02_graficos.log"
+: > "$ARQUIVO_LOG"
+
+registrar() {
+    echo "$1" | tee -a "$ARQUIVO_LOG"
+}
+
+registrar "Sprint 02 - Geracao dos graficos com GNUplot"
+registrar "Data de execucao: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+registrar ""
+
+GNUPLOT_BIN="gnuplot"
+
+if ! command -v "$GNUPLOT_BIN" >/dev/null 2>&1; then
+    # Caminho comum quando o GNUplot e instalado no Windows sem atualizar o PATH.
+    if command -v cygpath >/dev/null 2>&1 && [[ -n "${LOCALAPPDATA:-}" ]]; then
+        GNUPLOT_WINDOWS="$(cygpath -u "$LOCALAPPDATA")/Programs/gnuplot/bin/gnuplot.exe"
+        if [[ -x "$GNUPLOT_WINDOWS" ]]; then
+            GNUPLOT_BIN="$GNUPLOT_WINDOWS"
+        fi
+    fi
+fi
+
+if ! command -v "$GNUPLOT_BIN" >/dev/null 2>&1 && [[ ! -x "$GNUPLOT_BIN" ]]; then
+    registrar "GNUplot disponivel: nao"
+    registrar "Erros encontrados: GNUplot nao encontrado."
+    registrar "Mensagem final: graficos nao gerados."
+    registrar "Instale o GNUplot para gerar os arquivos PNG."
+    exit 1
+fi
+
+registrar "GNUplot disponivel: sim"
+registrar "Versao do GNUplot: $("$GNUPLOT_BIN" --version)"
+registrar ""
+registrar "Scripts .plt executados:"
+
+SCRIPTS_GNUPLOT=(
+    "scripts/gnuplot/casos_por_ano.plt"
+    "scripts/gnuplot/obitos_por_ano.plt"
+    "scripts/gnuplot/casos_por_uf.plt"
+    "scripts/gnuplot/casos_por_sexo.plt"
+    "scripts/gnuplot/classificacao_final.plt"
+)
+
+for SCRIPT in "${SCRIPTS_GNUPLOT[@]}"; do
+    registrar "- $SCRIPT"
+    "$GNUPLOT_BIN" "$SCRIPT"
+done
+
+registrar ""
+registrar "Graficos PNG gerados:"
+
+GRAFICOS=(
+    "graficos/casos_por_ano.png"
+    "graficos/obitos_por_ano.png"
+    "graficos/casos_por_uf.png"
+    "graficos/casos_por_sexo.png"
+    "graficos/classificacao_final.png"
+)
+
+ERRO=0
+for GRAFICO in "${GRAFICOS[@]}"; do
+    if [[ -f "$GRAFICO" ]]; then
+        registrar "- $GRAFICO"
+    else
+        registrar "- nao encontrado: $GRAFICO"
+        ERRO=1
+    fi
+done
+
+registrar ""
+if [[ "$ERRO" -eq 0 ]]; then
+    registrar "Erros encontrados: nenhum"
+    registrar "Mensagem final: graficos gerados com sucesso."
+else
+    registrar "Erros encontrados: um ou mais PNGs nao foram gerados."
+    registrar "Mensagem final: verifique os scripts GNUplot."
+    exit 1
+fi
+
+echo "Graficos gerados na pasta graficos."
